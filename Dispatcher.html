@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>无人机集群显控交互平台 - v16.1</title>
+<style>
+:root { 
+    --bg-global: #0a0b10; --bg-card: #1c1e26; --text-main: #f3f4f6; 
+    --text-muted: #8b92a5; --accent-cyan: #ffffff; --alert-red: #ff4757; 
+    --alert-orange: #ff9f43; --win-green: #00e676;
+}
+body { background: var(--bg-global); color: var(--text-main); font-family: monospace, sans-serif; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; user-select: none; gap: 15px; box-sizing: border-box; overflow: hidden; }
+#header { background: var(--bg-card); border-radius: 8px; padding: 15px 25px; display: flex; justify-content: space-between; border-bottom: 2px solid #2e313d; flex-shrink: 0; align-items: center;}
+.sys-title { font-weight: bold; font-size: 1.2em; letter-spacing: 1px;} .sys-status { color: var(--win-green); font-weight: bold; text-shadow: 0 0 10px rgba(0, 230, 118, 0.5);}
+
+#content-wrapper { display: flex; flex: 1; gap: 15px; min-height: 0; flex-direction: row; }
+
+/* 左侧面板 */
+#hud-left { width: 280px; display: flex; flex-direction: column; gap: 15px; flex-shrink: 0; overflow-y: auto; padding-right: 5px;}
+.drone-panel { flex: none; height: 95px; background: var(--bg-card); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; border-left: 4px solid #3d4251; position: relative; cursor: pointer; transition: transform 0.1s, background 0.2s; }
+.drone-panel:hover { background: rgba(255,255,255,0.05); }
+.drone-panel:active { transform: scale(0.97); }
+
+.drone-panel.active { border-left-color: var(--win-green); background: rgba(0, 230, 118, 0.05); box-shadow: inset 0 0 20px rgba(0, 230, 118, 0.1); }
+.drone-panel.alert-orange { border-left-color: var(--alert-orange); animation: pulse-orange 1.5s infinite; }
+
+.panel-header { display: flex; justify-content: space-between; align-items: center;}
+.panel-id { font-weight: bold; font-size: 1.1em; color: #fff;} 
+.panel-role { 
+    font-size: 0.75em; padding: 2px 6px; border-radius: 4px; font-weight: bold; 
+    background: rgba(0, 230, 118, 0.15); color: var(--win-green); border: 1px solid rgba(0, 230, 118, 0.3);
+}
+
+/* 状态文本 */
+.panel-status { font-size: 1.25em; font-weight: 900; letter-spacing: 1px; color: var(--text-muted); line-height: 1.2; margin-top: 5px;} 
+.drone-panel.alert-orange .panel-status { color: var(--alert-orange); animation: blink-text 1s infinite alternate; }
+.drone-panel.active .panel-status { color: var(--win-green); }
+
+.panel-key { font-size: 0.8em; position: absolute; bottom: 12px; right: 12px; font-weight: bold; color: #666; }
+
+@keyframes pulse-orange { 
+    0%, 100% { background: var(--bg-card); box-shadow: inset 0 0 0 transparent; } 
+    50% { background: rgba(255, 159, 67, 0.15); box-shadow: inset 0 0 15px rgba(255, 159, 67, 0.4); } 
+}
+@keyframes blink-text { from { opacity: 0.6; } to { opacity: 1; text-shadow: 0 0 8px rgba(255, 159, 67, 0.6); } }
+
+/* 主视窗 */
+#main-view-container { flex: 1; background: #030406; border-radius: 8px; position: relative; display: flex; justify-content: center; align-items: center; overflow: hidden; border: 1px solid #2e313d; cursor: crosshair; }
+canvas { display: block; width: 100%; height: 100%; pointer-events: auto; }
+
+/* 10秒悬浮弹窗 UI */
+#popups-container { position: absolute; top: 0; left: 15px; width: 200px; height: 100%; pointer-events: none; z-index: 60; }
+.takeover-popup {
+    position: absolute; width: 160px; background: rgba(20, 22, 28, 0.95);
+    border: 1px solid var(--alert-orange); border-radius: 6px; padding: 12px;
+    display: none; flex-direction: column; gap: 10px; z-index: 100;
+    box-shadow: 0 0 20px rgba(255, 159, 67, 0.2); backdrop-filter: blur(6px);
+    pointer-events: auto; 
+}
+.takeover-popup::before {
+    content: ''; position: absolute; left: -6px; top: 15px;
+    width: 10px; height: 10px; background: rgba(20, 22, 28, 0.95);
+    border-left: 1px solid var(--alert-orange); border-bottom: 1px solid var(--alert-orange);
+    transform: rotate(45deg);
+}
+.popup-title { font-size: 0.9em; font-weight: bold; color: var(--alert-orange); text-align: center; letter-spacing: 1px;}
+.popup-timer-bar { width: 100%; height: 4px; background: #2e313d; border-radius: 2px; overflow: hidden; }
+.popup-timer-fill { height: 100%; background: var(--alert-orange); width: 100%; transform-origin: left; transition: width 0.1s linear;}
+.popup-actions { display: flex; justify-content: space-between; gap: 10px; }
+.popup-btn {
+    flex: 1; padding: 8px 0; text-align: center; border-radius: 4px; cursor: pointer;
+    font-weight: bold; font-size: 0.9em; transition: 0.2s; border: 1px solid transparent; letter-spacing: 1px;
+}
+.btn-skip { background: rgba(255,255,255,0.05); color: #8b92a5; border: 1px solid #3d4251; }
+.btn-skip:hover { background: rgba(255,255,255,0.15); color: #fff; }
+.btn-take { background: var(--alert-orange); color: #000; }
+.btn-take:hover { background: #ffb142; box-shadow: 0 0 10px rgba(255, 159, 67, 0.5); }
+
+/* 左上角巨幅编号 */
+#top-left-uav-label {
+    position: absolute; top: 20px; left: 25px; font-size: 2em; font-weight: 900;
+    color: var(--win-green); text-shadow: 0 0 15px rgba(0, 230, 118, 0.4);
+    z-index: 50; pointer-events: none; letter-spacing: 2px; font-family: 'Arial Black', monospace;
+}
+
+/* 模式切换与统计按钮 */
+#mode-toggle-container {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; background: rgba(28, 30, 38, 0.85); border-radius: 6px; border: 1px solid #3d4251;
+    z-index: 50; overflow: hidden; backdrop-filter: blur(4px); align-items: stretch;
+}
+.mode-btn {
+    padding: 10px 25px; font-weight: bold; font-size: 0.9em; cursor: pointer; color: #8b92a5; transition: 0.2s;
+}
+.mode-btn.active { background: var(--win-green); color: #000; box-shadow: 0 0 15px rgba(0, 230, 118, 0.4); }
+.stat-box {
+    display: flex; align-items: center; padding: 0 20px; background: rgba(255, 71, 87, 0.05); 
+    border-left: 1px solid #3d4251; font-weight: bold; letter-spacing: 1px;
+}
+
+/* 小地图容器 */
+#minimap-container {
+    position: absolute; bottom: 20px; left: 20px; width: 240px; height: 240px; 
+    background: rgba(10, 11, 16, 0.85); border: 2px solid #3d4251; border-radius: 6px; 
+    z-index: 50; box-shadow: 0 0 20px rgba(0,0,0,0.8); pointer-events: none;
+}
+#minimapCanvas { width: 100%; height: 100%; display: block; }
+.minimap-label { position: absolute; top: 5px; left: 8px; color: rgba(255,255,255,0.5); font-size: 10px; font-weight: bold; }
+
+/* 操作手册 */
+#controls-help { 
+    position: absolute; bottom: 280px; left: 20px; color: #a4b0be; font-size: 0.8em; 
+    line-height: 1.6; background: rgba(28, 30, 38, 0.85); padding: 15px; 
+    border-radius: 8px; pointer-events: none; z-index: 10; border: 1px solid #3d4251; 
+    backdrop-filter: blur(4px); text-align: left; width: 210px;
+}
+
+#tactical-cursor { position: absolute; width: 30px; height: 30px; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 20; transition: width 0.1s, height 0.1s; }
+#tactical-cursor::before, #tactical-cursor::after { content: ''; position: absolute; width: 10px; height: 10px; border: 2px solid #ffffff; opacity: 0.7; }
+#tactical-cursor::before { top: 0; left: 0; border-right: none; border-bottom: none; }
+#tactical-cursor::after { bottom: 0; right: 0; border-left: none; border-top: none; }
+#tactical-cursor.lock-red { width: 100px; height: 100px; transform: translate(-50%, -50%) rotate(45deg); }
+#tactical-cursor.lock-red::before, #tactical-cursor.lock-red::after { border-color: var(--alert-red); width: 20px; height: 20px; opacity: 1;}
+
+.overlay-screen { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(5, 5, 8, 0.95); z-index: 100; display: none; flex-direction: column; justify-content: center; align-items: center; }
+#game-over-screen h1 { color: var(--alert-red); font-size: 3em; margin-bottom: 10px; text-shadow: 0 0 20px red; }
+#game-win-screen h1 { color: var(--win-green); font-size: 3em; margin-bottom: 10px; text-shadow: 0 0 20px var(--win-green); }
+.overlay-screen p { color: #fff; text-align: center; } 
+.restart-btn { margin-top: 20px; padding: 10px 30px; background: transparent; border: 1px solid #fff; color: #fff; cursor: pointer; border-radius: 4px; transition: 0.3s; font-weight: bold;} 
+.restart-btn:hover {background: #fff; color: #000;}
+
+#fx-container { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 30; overflow: hidden; }
+.floating-text { position: absolute; font-weight: bold; animation: float-up 1.5s forwards; white-space: nowrap; text-shadow: 0 2px 4px #000; font-size: 14px;}
+@keyframes float-up { 0% { transform: translate(-50%, 0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(-50%, -50px); opacity: 0; } }
+#hud-left::-webkit-scrollbar { width: 6px; } #hud-left::-webkit-scrollbar-track { background: var(--bg-global); } #hud-left::-webkit-scrollbar-thumb { background: #3d4251; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="header">
+    <span class="sys-title">无人机集群显控交互平台</span>
+    <span class="sys-status">神经直连状态: 活跃</span>
+</div>
+
+<div id="content-wrapper">
+    <div id="hud-left"></div>
+
+    <div id="main-view-container">
+        
+        <div id="popups-container"></div>
+
+        <div id="top-left-uav-label">UAV-01</div>
+
+        <div id="mode-toggle-container">
+            <div id="btn-auto" class="mode-btn active" onclick="gm.setControlMode('AUTO')">自主巡航</div>
+            <div id="btn-manual" class="mode-btn" onclick="gm.setControlMode('MANUAL')">手动控制</div>
+            <div class="stat-box">
+                <span style="color:#8b92a5; font-size:0.85em; margin-right:8px;">清除进度</span>
+                <span id="cleared-num" style="color:var(--alert-red); font-size:1.3em;">0</span>
+                <span style="color:#8b92a5; margin-left:4px;">/ 15</span>
+            </div>
+        </div>
+
+        <div id="minimap-container">
+            <div class="minimap-label">SATCOM MINIMAP</div>
+            <canvas id="minimapCanvas"></canvas>
+        </div>
+
+        <div id="controls-help">
+            <strong style="color:#ffffff">[ 指控终端操作手册 ]</strong><br>
+            > <strong>架构</strong>: 6机并联，按象限Z字形扫描。<br>
+            > <strong>分布</strong>: 战区随机分布2~3枚，共<span style="color:var(--alert-red)">15枚</span>威胁。<br>
+            > <strong>切换</strong>: 点击卡片 或 按键盘<span style="color:var(--win-green)">1-6键</span>。<br>
+            > <strong>控制</strong>: 碰WASD即手动，点按钮恢复自主。<br>
+            > <strong>火力</strong>: <span style="color:var(--alert-red)">按空格键(Space)</span>清除锁定威胁。<br>
+        </div>
+
+        <div id="top-alert-box">>>> 系统告警 <<<</div>
+        
+        <div id="tactical-cursor"></div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="fx-container"></div>
+        
+        <div id="game-over-screen" class="overlay-screen">
+            <h1>LINK LOST</h1><p id="fail-reason">战术失误</p>
+            <button class="restart-btn" onclick="location.reload()">重启系统</button>
+        </div>
+
+        <div id="game-win-screen" class="overlay-screen">
+            <h1>AREA SECURED</h1><p>所有威胁已被成功清除，航线绝对安全。</p>
+            <button class="restart-btn" onclick="location.reload()">执行下一阶段</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimapCanvas');
+const mctx = minimapCanvas.getContext('2d');
+
+const container = document.getElementById('main-view-container');
+const hud = document.getElementById('hud-left');
+const popupsContainer = document.getElementById('popups-container');
+const fx = document.getElementById('fx-container');
+const gameOverScreen = document.getElementById('game-over-screen');
+const gameWinScreen = document.getElementById('game-win-screen');
+const cursor = document.getElementById('tactical-cursor');
+
+const btnAuto = document.getElementById('btn-auto');
+const btnManual = document.getElementById('btn-manual');
+const topLeftLabel = document.getElementById('top-left-uav-label');
+const clearedNumLabel = document.getElementById('cleared-num');
+const topAlertBox = document.getElementById('top-alert-box');
+
+function resize() { 
+    canvas.width = container.clientWidth; canvas.height = container.clientHeight; 
+    minimapCanvas.width = 240; minimapCanvas.height = 240;
+}
+window.addEventListener('resize', resize); resize();
+
+const MAP_SIZE = 8000; 
+const GRID_SIZE = 150; 
+const DRONE_RADIUS = GRID_SIZE * 2; 
+const SHAPE_R = 25; 
+const SHAPE_MOAT = 80; 
+
+let isGameOver = false;
+let isGameWon = false;
+
+const COLORS = { orange: '#ff9f43', red: '#ff4757', white: '#ffffff', green: '#00e676', grid: 'rgba(255,255,255,0.04)' };
+
+let mouseX = canvas.width/2, mouseY = canvas.height/2;
+let hoveredShape = null;
+
+container.addEventListener('mousemove', e => {
+    if(isGameOver || isGameWon) return;
+    const rect = container.getBoundingClientRect();
+    mouseX = e.clientX - rect.left; mouseY = e.clientY - rect.top;
+    cursor.style.left = mouseX + 'px'; cursor.style.top = mouseY + 'px';
+});
+
+const keys = { w:false, a:false, s:false, d:false };
+window.addEventListener('keydown', e => {
+    if(isGameOver || isGameWon) return;
+    const k = e.key.toLowerCase(); 
+
+    if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault(); 
+        const ad = gm.drones[gm.active];
+        let neutralized = false;
+
+        for (let s of gm.shapes) {
+            if (s.active && Math.hypot(s.x - ad.x, s.y - ad.y) <= DRONE_RADIUS + s.moat) {
+                s.active = false;
+                spawnText('THREAT NEUTRALIZED', s.x - ad.x + canvas.width/2, s.y - ad.y + canvas.height/2, COLORS.red);
+                neutralized = true;
+                
+                ad.stuck = false;
+                ad.needTakeover = false;
+                ad.currentThreat = null;
+                break; 
+            }
+        }
+
+        if (neutralized) {
+            gm.checkWinCondition();
+        } else {
+            spawnText('NO TARGET LOCKED', canvas.width/2, canvas.height/2 - 30, '#8b92a5');
+        }
+        return;
+    }
+
+    if(keys.hasOwnProperty(k)) {
+        keys[k] = true;
+        if (gm.drones[gm.active].mode !== 'MANUAL') gm.setControlMode('MANUAL');
+    }
+    
+    if(['1','2','3','4','5','6'].includes(e.key)) {
+        gm.switchDrone(parseInt(e.key) - 1); 
+    }
+});
+
+window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase(); if(keys.hasOwnProperty(k)) keys[k] = false;
+});
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+container.addEventListener('mousedown', e => {
+    if(isGameOver || isGameWon || e.button !== 0) return; 
+
+    let clickedDrone = -1;
+    const cx = gm.drones[gm.active].x, cy = gm.drones[gm.active].y;
+    gm.drones.forEach((d, i) => {
+        if (i !== gm.active) {
+            const screenX = d.x - cx + canvas.width/2;
+            const screenY = d.y - cy + canvas.height/2;
+            if (Math.hypot(mouseX - screenX, mouseY - screenY) < 36) { 
+                clickedDrone = i;
+            }
+        }
+    });
+
+    if (clickedDrone !== -1) {
+        gm.switchDrone(clickedDrone);
+        spawnText(`>> 数据链跳转 UAV-0${clickedDrone+1}`, mouseX, mouseY, '#fff');
+    } else {
+        spawnText('INVALID COMMAND: PRESS [SPACE]', mouseX, mouseY, '#8b92a5');
+    }
+});
+
+function spawnText(txt, wx, wy, color) {
+    const el = document.createElement('div'); el.className = 'floating-text'; el.innerText = txt; el.style.color = color;
+    el.style.left = wx + 'px'; el.style.top = wy + 'px';
+    fx.appendChild(el); setTimeout(() => el.remove(), 1500);
+}
+
+function die(reason) { if(isGameOver || isGameWon) return; isGameOver = true; document.getElementById('fail-reason').innerHTML = reason; gameOverScreen.style.display = 'flex'; cursor.style.display = 'none'; topAlertBox.style.display='none'; }
+function win() { if(isGameOver || isGameWon) return; isGameWon = true; gameWinScreen.style.display = 'flex'; cursor.style.display = 'none'; topAlertBox.style.display='none'; }
+
+function drawFullDrone(ctx, x, y, isActive, droneId, isStuck) {
+    ctx.save(); ctx.translate(x, y); 
+    
+    let alpha = isActive ? 1.0 : 0.3; 
+    let color = COLORS.white;
+    let shadow = 0;
+
+    if (isStuck && !isActive) {
+        const pulse = (Math.sin(Date.now() / 200) + 1) / 2;
+        alpha = 0.6 + 0.4 * pulse;
+        color = COLORS.orange;
+        shadow = 10 + 15 * pulse;
+    }
+
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.globalAlpha = alpha;
+    if (shadow > 0) { ctx.shadowColor = color; ctx.shadowBlur = shadow; }
+    
+    ctx.save();
+    ctx.rotate((Date.now() % (isStuck ? 8000 : 16000)) / (isStuck ? 8000 : 16000) * Math.PI * 2);
+    ctx.lineWidth = 2; ctx.setLineDash([15, 20]); 
+    ctx.beginPath(); ctx.arc(0, 0, DRONE_RADIUS, 0, Math.PI*2); ctx.stroke();
+    ctx.restore();
+
+    ctx.scale(1.5, 1.5);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-7, -7); ctx.lineTo(7, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-7, 7); ctx.lineTo(7, -7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-7, -7, 4, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(7, -7, 4, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-7, 7, 4, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(7, 7, 4, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, Math.PI*2); ctx.fill();
+    ctx.scale(1/1.5, 1/1.5);
+    
+    if (droneId !== undefined) {
+        ctx.shadowBlur = isActive || isStuck ? 4 : 0;
+        ctx.shadowColor = isActive ? COLORS.green : color;
+        ctx.font = 'bold 16px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillStyle = isActive ? COLORS.green : color;
+        ctx.fillText(`[0${droneId + 1}]`, 20, 20);
+    }
+    ctx.restore();
+}
+
+class Shape {
+    constructor(x, y) {
+        this.x = x; this.y = y; this.active = true;
+        this.r = SHAPE_R; this.moat = SHAPE_MOAT; 
+    }
+    draw(cx, cy) {
+        if(!this.active) return;
+        const sx = this.x - cx + canvas.width/2, sy = this.y - cy + canvas.height/2;
+        
+        ctx.strokeStyle = 'rgba(255,71,87,0.6)';
+        ctx.lineWidth = 2; ctx.setLineDash([8,8]); ctx.beginPath(); ctx.arc(sx, sy, this.moat, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+        
+        ctx.fillStyle = COLORS.red; ctx.beginPath();
+        ctx.moveTo(sx, sy-this.r); ctx.lineTo(sx-this.r*0.9, sy+this.r*0.7); ctx.lineTo(sx+this.r*0.9, sy+this.r*0.7);
+        ctx.fill();
+    }
+}
+
+class Drone {
+    constructor(id) {
+        this.id = id; 
+        this.spd = 4.0; 
+        this.stuck = false;
+        this.mode = 'AUTO'; 
+        
+        this.needTakeover = false;
+        this.stuckTimestamp = 0;
+        this.stuckTimer = 0;
+        this.currentThreat = null;
+        this.ignoredThreats = new Set(); 
+        
+        // 6 区块分配：3 列 x 2 行
+        const col = id % 3;
+        const row = Math.floor(id / 3);
+        const colWidth = MAP_SIZE / 3;
+        const rowHeight = MAP_SIZE / 2;
+
+        this.minX = col * colWidth;
+        this.maxX = (col + 1) * colWidth;
+        this.minY = row * rowHeight;
+        this.maxY = (row + 1) * rowHeight;
+
+        this.generateZPath();
+        this.pathIndex = 0;
+        this.x = this.path[0].x;
+        this.y = this.path[0].y;
+    }
+
+    generateZPath() {
+        this.path = [];
+        let margin = DRONE_RADIUS; 
+        let sX = this.minX + margin; let eX = this.maxX - margin;
+        let sY = this.minY + margin; let eY = this.maxY - margin;
+        
+        let sweepSpacing = DRONE_RADIUS * 1.5; 
+        let sweeps = Math.ceil((eY - sY) / sweepSpacing) + 1;
+        let actualDy = (eY - sY) / (sweeps - 1);
+
+        for(let i=0; i<sweeps; i++) {
+            let y = sY + i * actualDy;
+            if(i % 2 === 0) {
+                this.path.push({x: sX, y: y}); this.path.push({x: eX, y: y});
+            } else {
+                this.path.push({x: eX, y: y}); this.path.push({x: sX, y: y});
+            }
+        }
+    }
+
+    skipCurrentThreat() {
+        if (this.currentThreat) {
+            this.ignoredThreats.add(this.currentThreat);
+            this.currentThreat = null;
+        }
+        this.needTakeover = false;
+        this.stuck = false;
+    }
+
+    update(isActive, shapes) {
+        if(isGameOver || isGameWon) return;
+        this.stuck = false; this.pCls = ''; 
+        
+        let touchingThreat = null;
+        for(let s of shapes) {
+            if(s.active && !this.ignoredThreats.has(s) && Math.hypot(s.x-this.x, s.y-this.y) <= DRONE_RADIUS + s.moat) {
+                touchingThreat = s; break;
+            }
+        }
+
+        if (this.mode === 'AUTO') {
+            if (touchingThreat) {
+                this.stuck = true; 
+                this.pCls = 'alert-orange'; 
+                this.txt = '请求接管'; 
+
+                if (!this.needTakeover) {
+                    this.needTakeover = true;
+                    this.stuckTimestamp = Date.now();
+                    this.currentThreat = touchingThreat;
+                    this.stuckTimer = 10.0;
+                } else {
+                    let elapsed = (Date.now() - this.stuckTimestamp) / 1000;
+                    this.stuckTimer = 10.0 - elapsed;
+                    if (this.stuckTimer <= 0) {
+                        this.skipCurrentThreat(); 
+                    }
+                }
+            } else {
+                this.needTakeover = false;
+                this.txt = '巡航中...';
+                let target = this.path[this.pathIndex];
+                let dist = Math.hypot(target.x - this.x, target.y - this.y);
+                if (dist < this.spd) {
+                    this.pathIndex++;
+                    if (this.pathIndex >= this.path.length) {
+                        this.path.reverse(); 
+                        this.pathIndex = 1; 
+                    }
+                } else {
+                    let angle = Math.atan2(target.y - this.y, target.x - this.x);
+                    this.x += Math.cos(angle) * this.spd;
+                    this.y += Math.sin(angle) * this.spd;
+                }
+            }
+        } else {
+            this.needTakeover = false;
+            this.pCls = 'active'; this.txt = '手动控制';
+            if(isActive) {
+                if(keys.w) this.y -= this.spd; if(keys.s) this.y += this.spd;
+                if(keys.a) this.x -= this.spd; if(keys.d) this.x += this.spd;
+            }
+        }
+
+        this.x = Math.max(0, Math.min(MAP_SIZE, this.x));
+        this.y = Math.max(0, Math.min(MAP_SIZE, this.y));
+
+        shapes.forEach(s => { 
+            if(s.active && !this.ignoredThreats.has(s) && Math.hypot(s.x-this.x, s.y-this.y) <= s.r + 15) {
+                die("极度靠近<br><span style='font-size:0.5em;color:#8b92a5'>机体撞击高爆内核碎裂</span>"); 
+            }
+        });
+    }
+}
+
+class GameManager {
+    constructor() { this.drones = []; this.shapes = []; this.active = 0; this.panels = []; this.init(); }
+    init() {
+        for(let i=0; i<6; i++) this.drones.push(new Drone(i));
+
+        for(let i=0; i<6; i++) {
+            const p = document.createElement('div');
+            p.className = 'drone-panel';
+            p.innerHTML = `
+                <div class="panel-header">
+                    <div class="panel-id">UAV-0${i+1}</div>
+                    <div class="panel-role">链接正常</div>
+                </div>
+                <div class="panel-status">SYS_BOOT</div>
+                <div class="panel-key">[${i+1}] 键</div>`;
+            
+            p.addEventListener('click', () => { this.switchDrone(i); });
+            hud.appendChild(p); this.panels.push(p);
+
+            const popup = document.createElement('div');
+            popup.className = 'takeover-popup';
+            popup.id = `popup-${i}`;
+            popup.style.top = `${i * 110 + 15}px`; 
+            popup.innerHTML = `
+                <div class="popup-title">UAV-0${i+1} 发现威胁</div>
+                <div class="popup-timer-bar"><div class="popup-timer-fill" id="popup-fill-${i}"></div></div>
+                <div class="popup-actions">
+                    <div class="popup-btn btn-skip" onclick="gm.skipThreat(${i})">跳过</div>
+                    <div class="popup-btn btn-take" onclick="gm.switchDrone(${i})">[${i+1}] 键</div>
+                </div>
+            `;
+            popupsContainer.appendChild(popup);
+        }
+
+        const quadrants = [];
+        for(let i=0; i<6; i++) {
+            const col = i % 3;
+            const row = Math.floor(i / 3);
+            quadrants.push({
+                minX: col * (MAP_SIZE / 3),
+                maxX: (col + 1) * (MAP_SIZE / 3),
+                minY: row * (MAP_SIZE / 2),
+                maxY: (row + 1) * (MAP_SIZE / 2)
+            });
+        }
+
+        // 随机分配 2 或 3 枚威胁，保证总计正好 15 枚
+        let counts = [2, 2, 2, 3, 3, 3];
+        for (let i = counts.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [counts[i], counts[j]] = [counts[j], counts[i]];
+        }
+
+        quadrants.forEach((q, idx) => {
+            let count = 0;
+            let targetCount = counts[idx];
+            while(count < targetCount) {
+                const x = q.minX + 150 + Math.random() * (q.maxX - q.minX - 300);
+                const y = q.minY + 150 + Math.random() * (q.maxY - q.minY - 300);
+                if(!this.shapes.some(s => Math.hypot(s.x-x, s.y-y) < 250)) {
+                    this.shapes.push(new Shape(x, y));
+                    count++;
+                }
+            }
+        });
+        
+        this.setControlMode('AUTO');
+        topLeftLabel.innerText = 'UAV-01';
+        this.checkWinCondition(); 
+    }
+
+    checkWinCondition() {
+        let cleared = this.shapes.filter(s => !s.active).length;
+        clearedNumLabel.innerText = cleared;
+        // 总共清除15个即可胜利
+        if(cleared >= 15) win(); 
+    }
+
+    skipThreat(idx) {
+        this.drones[idx].skipCurrentThreat();
+    }
+
+    switchDrone(idx) {
+        if(idx >= 0 && idx < 6 && idx !== this.active) {
+            this.active = idx; 
+            topLeftLabel.innerText = `UAV-0${idx+1}`;
+            this.updateModeUI();
+        }
+    }
+
+    setControlMode(mode) {
+        this.drones[this.active].mode = mode;
+        this.updateModeUI();
+    }
+
+    updateModeUI() {
+        let currentMode = this.drones[this.active].mode;
+        btnAuto.className = currentMode === 'AUTO' ? 'mode-btn active' : 'mode-btn';
+        btnManual.className = currentMode === 'MANUAL' ? 'mode-btn active' : 'mode-btn';
+    }
+    
+    loop() {
+        const ad = this.drones[this.active];
+        const cx = ad.x, cy = ad.y;
+        
+        this.drones.forEach((d, i) => d.update(i === this.active, this.shapes));
+        
+        let anyStuck = false;
+        let stuckDrones = [];
+        this.drones.forEach((d, i) => { 
+            this.panels[i].className = `drone-panel ${d.pCls}`; 
+            this.panels[i].querySelector('.panel-status').innerText = d.txt; 
+            
+            const popup = document.getElementById(`popup-${i}`);
+            const fill = document.getElementById(`popup-fill-${i}`);
+            
+            if (d.needTakeover && i !== this.active) {
+                anyStuck = true; stuckDrones.push(i+1);
+                popup.style.display = 'flex';
+                const pct = Math.max(0, d.stuckTimer / 10.0) * 100;
+                fill.style.width = `${pct}%`;
+            } else {
+                popup.style.display = 'none';
+            }
+        });
+
+        if(anyStuck) {
+            topAlertBox.style.display = 'block';
+            topAlertBox.innerText = `[ 指控告警 ] 战区雷达报警。UAV-${stuckDrones.join(', ')} 遭遇威胁阻挡，请求降临！`;
+        } else {
+            topAlertBox.style.display = 'none';
+        }
+
+        hoveredShape = null;
+        let screenLeft = cx - canvas.width/2, screenRight = cx + canvas.width/2;
+        let screenTop = cy - canvas.height/2, screenBottom = cy + canvas.height/2;
+
+        this.shapes.forEach(s => { 
+            if(s.active && s.x > screenLeft && s.x < screenRight && s.y > screenTop && s.y < screenBottom) {
+                const screenX = s.x - cx + canvas.width/2;
+                const screenY = s.y - cy + canvas.height/2;
+                if(Math.hypot(mouseX - screenX, mouseY - screenY) < s.moat * 1.5) {
+                    hoveredShape = s;
+                }
+            }
+        });
+
+        cursor.className = hoveredShape ? 'lock-red' : '';
+
+        ctx.fillStyle = '#0a0b10'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = COLORS.grid; ctx.beginPath();
+        for(let x = -(cx % GRID_SIZE); x < canvas.width; x += GRID_SIZE) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+        for(let y = -(cy % GRID_SIZE); y < canvas.height; y += GRID_SIZE) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+        ctx.stroke();
+
+        let targetToShoot = null;
+        for(let s of this.shapes) {
+            if(s.active && Math.hypot(s.x-cx, s.y-cy) <= DRONE_RADIUS + s.moat) {
+                targetToShoot = s; break;
+            }
+        }
+
+        if (targetToShoot) {
+            const screenX = targetToShoot.x - cx + canvas.width/2;
+            const screenY = targetToShoot.y - cy + canvas.height/2;
+
+            ctx.save();
+            ctx.strokeStyle = COLORS.red;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(canvas.width/2, canvas.height/2);
+            ctx.lineTo(screenX, screenY);
+            ctx.stroke();
+
+            const pulse = (Math.sin(Date.now() / 150) + 1) / 2;
+
+            ctx.fillStyle = COLORS.orange;
+            ctx.font = 'bold 16px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.globalAlpha = 0.6 + 0.4 * pulse;
+            ctx.fillText("[ 锁定威胁: 按 SPACE 键清除 ]", canvas.width/2, canvas.height/2 - 60);
+
+            ctx.strokeStyle = COLORS.orange;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, targetToShoot.moat + 10 + 5 * pulse, 0, Math.PI*2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        this.shapes.forEach(s => { 
+            if(s.active && s.x > screenLeft - 100 && s.x < screenRight + 100 && s.y > screenTop - 100 && s.y < screenBottom + 100) {
+                s.draw(cx, cy); 
+            }
+        });
+        
+        this.drones.forEach((d, i) => {
+            if(i !== this.active && d.x > screenLeft - 350 && d.x < screenRight + 350 && d.y > screenTop - 350 && d.y < screenBottom + 350) {
+                drawFullDrone(ctx, d.x - cx + canvas.width/2, d.y - cy + canvas.height/2, false, d.id, d.stuck); 
+            }
+        });
+        
+        drawFullDrone(ctx, canvas.width/2, canvas.height/2, true, ad.id, ad.stuck); 
+
+        this.drawMinimap(cx, cy, screenLeft, screenRight, screenTop, screenBottom);
+
+        if(!isGameOver && !isGameWon) requestAnimationFrame(() => this.loop());
+    }
+
+    drawMinimap(cx, cy, screenLeft, screenRight, screenTop, screenBottom) {
+        const mw = minimapCanvas.width;
+        const mh = minimapCanvas.height;
+        
+        mctx.clearRect(0, 0, mw, mh);
+        
+        mctx.strokeStyle = 'rgba(255,255,255,0.15)'; mctx.lineWidth = 1;
+        mctx.beginPath(); 
+        mctx.moveTo(mw/3, 0); mctx.lineTo(mw/3, mh); 
+        mctx.moveTo(2*mw/3, 0); mctx.lineTo(2*mw/3, mh); 
+        mctx.moveTo(0, mh/2); mctx.lineTo(mw, mh/2); 
+        mctx.stroke();
+
+        mctx.fillStyle = COLORS.red;
+        this.shapes.forEach(s => {
+            if(s.active && s.x > screenLeft && s.x < screenRight && s.y > screenTop && s.y < screenBottom) {
+                let mapX = (s.x / MAP_SIZE) * mw; let mapY = (s.y / MAP_SIZE) * mh;
+                mctx.beginPath(); mctx.moveTo(mapX, mapY - 4); mctx.lineTo(mapX - 3.5, mapY + 3.5); mctx.lineTo(mapX + 3.5, mapY + 3.5); mctx.fill();
+            }
+        });
+
+        this.drones.forEach((d, i) => {
+            let mapX = (d.x / MAP_SIZE) * mw; let mapY = (d.y / MAP_SIZE) * mh;
+            
+            mctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            mctx.beginPath(); mctx.arc(mapX, mapY, (DRONE_RADIUS / MAP_SIZE) * mw, 0, Math.PI*2); mctx.stroke();
+
+            if (i === this.active) mctx.fillStyle = COLORS.green;
+            else if (d.stuck) { const p = (Math.sin(Date.now() / 200)+1)/2; mctx.fillStyle = `rgba(255, 159, 67, ${0.5 + 0.5*p})`; } 
+            else mctx.fillStyle = COLORS.white;
+
+            mctx.beginPath(); mctx.arc(mapX, mapY, i === this.active ? 4 : 2.5, 0, Math.PI*2); mctx.fill();
+        });
+
+        let fovW = (canvas.width / MAP_SIZE) * mw;
+        let fovH = (canvas.height / MAP_SIZE) * mh;
+        let fovX = (screenLeft / MAP_SIZE) * mw;
+        let fovY = (screenTop / MAP_SIZE) * mh;
+        
+        mctx.strokeStyle = 'rgba(0, 230, 118, 0.4)'; mctx.lineWidth = 1.5;
+        mctx.strokeRect(fovX, fovY, fovW, fovH);
+    }
+}
+const gm = new GameManager(); gm.loop();
+</script>
+</body>
+</html>
